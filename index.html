@@ -1,0 +1,1127 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<title>Indexbaum — warum zwei Zeilen aus einer Million schnell gehen</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Ein B+-Baum von Hand gebaut, mit gezählten Seitenzugriffen: Index gegen vollständigen Durchlauf, das Kostenmodell eines Abfrageplaners und der Punkt, an dem der Index zur Bremse wird." />
+
+<style>
+  :root {
+    --grund: #EEEFF1;
+    --feld:  #FAFBFC;
+    --tief:  #E2E4E8;
+    --linie: #C5C9CF;
+    --tinte: #15181C;
+    --leise: #616772;
+    --netz:  #B3B8C0;
+    --baum:  #2A5D8F;   /* Index */
+    --heap:  #8C5A1E;   /* Tabellenseiten */
+    --scan:  #7A3E8F;   /* vollständiger Durchlauf */
+    --treff: #2C7A34;   /* Treffer */
+    --warn:  #A32C22;
+    --gut:   #2C7A34;
+    --schatten: 0 1px 0 rgba(21,24,28,.05), 0 10px 24px -16px rgba(21,24,28,.45);
+    --f-fest: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
+    --f-text: -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --grund: #101215; --feld: #171A1E; --tief: #0B0D0F; --linie: #2B3037;
+      --tinte: #E4E7EC; --leise: #8B929C; --netz: #383E46;
+      --baum: #6CA8E8; --heap: #DFA65E; --scan: #C08AD8; --treff: #7FBF6A;
+      --warn: #E0776B; --gut: #7FBF6A;
+      --schatten: 0 1px 0 rgba(255,255,255,.03), 0 12px 30px -18px #000;
+    }
+  }
+  :root[data-theme="dark"] {
+    --grund: #101215; --feld: #171A1E; --tief: #0B0D0F; --linie: #2B3037;
+    --tinte: #E4E7EC; --leise: #8B929C; --netz: #383E46;
+    --baum: #6CA8E8; --heap: #DFA65E; --scan: #C08AD8; --treff: #7FBF6A;
+    --warn: #E0776B; --gut: #7FBF6A;
+    --schatten: 0 1px 0 rgba(255,255,255,.03), 0 12px 30px -18px #000;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--grund); color:var(--tinte);
+    font-family:var(--f-text); font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .blatt { max-width:1160px; margin:0 auto;
+    padding: clamp(20px,4vw,44px) clamp(14px,3vw,28px) 64px;
+    display:flex; flex-direction:column; gap:18px; }
+
+  .marke { font-family:var(--f-fest); font-size:10px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--leise); display:flex; gap:12px; align-items:center; margin:0; }
+  .marke::after { content:""; flex:1; height:1px; background:var(--linie); }
+  h1 { font-family:var(--f-fest); font-weight:700; font-size:clamp(24px,4.2vw,40px);
+    line-height:1.06; letter-spacing:-.03em; margin:0; text-wrap:balance; }
+  h1 span { color:var(--baum); }
+  .vorspann { max-width:70ch; color:var(--leise); margin:0; }
+  .vorspann b { color:var(--tinte); font-weight:600; }
+
+  .leiste { display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+    background:var(--feld); border:1px solid var(--linie); padding:9px 11px; box-shadow:var(--schatten); }
+  .kl { font-family:var(--f-fest); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--leise); }
+  button, select, input { font-family:var(--f-fest); font-size:12px; color:var(--tinte); background:var(--grund);
+    border:1px solid var(--linie); border-radius:0; padding:6px 10px; letter-spacing:.03em; }
+  button, select { cursor:pointer; }
+  button:hover, select:hover { border-color:var(--baum); }
+  button:active { background:var(--tief); }
+  button.haupt { background:var(--baum); border-color:var(--baum); color:var(--feld); }
+  button[aria-pressed="true"] { background:var(--tief); border-color:var(--baum); }
+  input[type=range] { padding:0; background:none; border:none; accent-color:var(--baum); vertical-align:middle; }
+  :focus-visible { outline:2px solid var(--baum); outline-offset:2px; }
+
+  .kasten { background:var(--feld); border:1px solid var(--linie); box-shadow:var(--schatten);
+    display:flex; flex-direction:column; min-width:0; }
+  .kasten-kopf { display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    padding:8px 11px; border-bottom:1px solid var(--linie); }
+  .kasten-leib { padding:11px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .buehne { display:grid; grid-template-columns: 1fr 330px; gap:18px; align-items:start; }
+  @media (max-width: 900px) { .buehne { grid-template-columns: minmax(0,1fr); } }
+  .saeule { display:flex; flex-direction:column; gap:18px; min-width:0; }
+
+  canvas { width:100%; height:auto; display:block; background:var(--tief); border:1px solid var(--linie);
+    touch-action:none; }
+
+  .regler { display:grid; grid-template-columns:auto 1fr auto; gap:6px 8px; align-items:center; }
+  .regler .z { font-family:var(--f-fest); font-size:11px; font-variant-numeric:tabular-nums;
+    color:var(--leise); text-align:right; min-width:6ch; }
+
+  .werte { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:1px;
+    background:var(--linie); border:1px solid var(--linie); }
+  .wert { background:var(--feld); padding:8px 10px; min-width:0; }
+  .wert .l { font-family:var(--f-fest); font-size:9.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--leise); }
+  .wert .n { font-family:var(--f-fest); font-size:17px; font-variant-numeric:tabular-nums; }
+  .wert .n.baum { color:var(--baum); } .wert .n.scan { color:var(--scan); }
+  .wert .n.gut { color:var(--gut); } .wert .n.warn { color:var(--warn); }
+
+  table.liste { border-collapse:collapse; width:100%; font-family:var(--f-fest); font-size:12px; }
+  table.liste th, table.liste td { border-bottom:1px solid var(--linie); padding:5px 7px; text-align:left; }
+  table.liste th { color:var(--leise); font-weight:400; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
+  table.liste td.z { text-align:right; font-variant-numeric:tabular-nums; }
+  .gutt { color:var(--gut); } .schlecht { color:var(--warn); }
+
+  .hinweis { font-family:var(--f-fest); font-size:12px; color:var(--leise); letter-spacing:0; margin:0; }
+  .hinweis b { color:var(--tinte); font-weight:600; }
+  .strich { display:inline-block; width:14px; height:2px; vertical-align:3px; margin-right:5px; }
+  .abfrage { font-family:var(--f-fest); font-size:13px; background:var(--tief); padding:8px 10px;
+    border-left:3px solid var(--baum); overflow-x:auto; white-space:nowrap; }
+
+  .noten { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:18px; margin-top:6px; }
+  .noten section { background:var(--feld); border:1px solid var(--linie); padding:12px 14px; box-shadow:var(--schatten); }
+  .noten h3 { font-family:var(--f-fest); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--leise); margin:0 0 6px; font-weight:400; }
+  .noten p { margin:0; font-size:14px; }
+  code { font-family:var(--f-fest); font-size:12.5px; background:var(--tief); padding:1px 4px; }
+  .fuss { color:var(--leise); font-size:13px; border-top:1px solid var(--linie); padding-top:12px; }
+  .fuss a { color:var(--baum); }
+</style>
+</head>
+<body>
+<main class="blatt">
+
+  <p class="marke">Blatt · Datenbank</p>
+  <h1>Indexbaum — warum <span>zwei Zeilen</span> aus einer Million schnell gehen</h1>
+  <p class="vorspann">
+    Eine Datenbank liest keine Zeilen, sie liest <b>Seiten</b>. Das ist die einzige Einheit, in der
+    Geschwindigkeit gemessen wird — und der Grund, warum ein Index bei zwei Treffern gewinnt und
+    bei einer halben Tabelle verliert. Hier ist der Baum gebaut, jede angefasste Seite gezählt und
+    der Abfrageplaner dabei zu beobachten, wie er sich vertut.
+  </p>
+
+  <div class="leiste">
+    <span class="kl">Zeilen</span>
+    <select id="zeilen" aria-label="Anzahl Zeilen">
+      <option>1000</option><option selected>20000</option><option>200000</option>
+    </select>
+    <span class="kl" style="margin-left:6px">Ordnung</span>
+    <select id="ordnung" aria-label="Verzweigungsgrad">
+      <option>4</option><option>8</option><option selected>32</option><option>128</option>
+    </select>
+    <span class="kl" style="margin-left:6px">Zeilen je Seite</span>
+    <select id="pro-seite" aria-label="Zeilen je Tabellenseite">
+      <option>8</option><option selected>32</option><option>128</option>
+    </select>
+    <button id="b-cluster" aria-pressed="false">nach Schlüssel abgelegt</button>
+    <span style="flex:1"></span>
+    <button id="b-thema">Ansicht</button>
+  </div>
+
+  <div class="buehne">
+    <div class="saeule">
+      <div class="kasten">
+        <div class="kasten-kopf">
+          <span class="kl">Der Baum</span>
+          <span class="kl" id="baum-lage" style="margin-left:auto"></span>
+        </div>
+        <div class="kasten-leib">
+          <canvas id="baum" width="1024" height="260" aria-label="Aufbau des B+-Baums"></canvas>
+          <p class="hinweis">
+            Oben die Wurzel, unten die Blätter — nur Blätter tragen Daten, alle liegen auf
+            <b>derselben Tiefe</b>, und sie sind untereinander verkettet. Deshalb kostet ein
+            Bereich nicht mehr als der Einstieg plus das Weiterlaufen in der Kette.
+            <span class="strich" style="background:var(--baum)"></span>angefasste Knoten der
+            laufenden Abfrage.
+          </p>
+        </div>
+      </div>
+
+      <div class="kasten">
+        <div class="kasten-kopf">
+          <span class="kl">Seitenzugriffe über die Trefferquote</span>
+          <span class="kl" id="kurve-lage" style="margin-left:auto"></span>
+        </div>
+        <div class="kasten-leib">
+          <canvas id="kurve" width="1024" height="330" aria-label="Kostenverlauf beider Zugriffswege"></canvas>
+          <p class="hinweis" id="kurve-fuss"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="saeule">
+      <div class="kasten">
+        <div class="kasten-kopf"><span class="kl">Abfrage</span></div>
+        <div class="kasten-leib">
+          <div class="abfrage" id="abfrage-text"></div>
+          <div class="regler">
+            <span class="kl">von</span>
+            <input type="range" id="von" min="0" max="1000" value="480" aria-label="Untergrenze" />
+            <span class="z" id="von-zahl"></span>
+            <span class="kl">bis</span>
+            <input type="range" id="bis" min="0" max="1000" value="505" aria-label="Obergrenze" />
+            <span class="z" id="bis-zahl"></span>
+          </div>
+          <p class="hinweis" id="abfrage-fuss"></p>
+        </div>
+      </div>
+
+      <div class="kasten">
+        <div class="kasten-kopf"><span class="kl">Gezählt, nicht geschätzt</span></div>
+        <div class="kasten-leib">
+          <div class="werte">
+            <div class="wert"><div class="l">Treffer</div><div class="n" id="w-treffer">—</div></div>
+            <div class="wert"><div class="l">Trefferquote</div><div class="n" id="w-quote">—</div></div>
+            <div class="wert"><div class="l">über Index</div><div class="n baum" id="w-index">—</div></div>
+            <div class="wert"><div class="l">alles durchlesen</div><div class="n scan" id="w-scan">—</div></div>
+          </div>
+          <table class="liste" id="planer"><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kasten">
+    <div class="kasten-kopf">
+      <span class="kl">Beweis statt Behauptung</span>
+      <button id="b-pruefen" class="haupt" style="margin-left:auto">Prüfen</button>
+    </div>
+    <div class="kasten-leib">
+      <p class="hinweis">
+        Ein Index, der falsche Zeilen liefert, ist schlimmer als kein Index. Deshalb wird
+        <b>jede</b> Bereichsabfrage gegen einen stumpfen Durchlauf durch die ganze Tabelle
+        gestellt — alle Grenzenpaare eines Wertebereichs, nicht ein paar Stichproben. Dazu werden
+        die Baumbedingungen nach <b>jeder einzelnen</b> Einfügung und jedem Löschen nachgerechnet:
+        gleiche Tiefe aller Blätter, Sortierung, Mindestfüllung, richtige Trennschlüssel,
+        vollständige Blattkette.
+      </p>
+      <table class="liste" id="pruef"><tbody></tbody></table>
+      <p class="hinweis" id="pruef-fuss">noch nicht geprüft</p>
+    </div>
+  </div>
+
+  <div class="noten">
+    <section>
+      <h3>Warum ein Baum und keine Liste</h3>
+      <p>
+        Mit Verzweigungsgrad 128 fasst eine Ebene 128 Knoten, zwei Ebenen 16 384, drei Ebenen zwei
+        Millionen. Deshalb ist die Höhe eines echten Index praktisch immer <b>drei oder vier</b> —
+        und deshalb kostet ein Punktzugriff auf eine Milliarde Zeilen kaum mehr als auf tausend.
+      </p>
+    </section>
+    <section>
+      <h3>Warum der Index verliert</h3>
+      <p>
+        Bei vielen Treffern springt der Index für jede Zeile in eine beliebige Tabellenseite. Liegen
+        die Zeilen verstreut, wird jede Seite <b>mehrfach</b> geholt oder es sind mehr Zugriffe als
+        Seiten insgesamt. Der vollständige Durchlauf liest dieselben Seiten genau einmal, in
+        Reihenfolge — und gewinnt.
+      </p>
+    </section>
+    <section>
+      <h3>Was Clustering ändert</h3>
+      <p>
+        Liegen die Zeilen in Schlüsselreihenfolge auf der Platte, liest der Index sie
+        zusammenhängend, und der Kipppunkt verschiebt sich weit nach oben. Das ist der ganze
+        Unterschied zwischen einem <i>clustered index</i> und einem gewöhnlichen — im Schalter oben
+        umzustellen, in der Kurve sofort zu sehen.
+      </p>
+    </section>
+  </div>
+
+  <p class="fuss">
+    Eine einzelne HTML-Datei. Kein Build, keine Bibliothek, nichts verlässt den Browser.
+    <span style="display:block;margin-top:8px">
+      Verwandt:
+      <a href="https://ssims437.github.io/plotterblaetter/">Plotterblätter</a> ·
+      <a href="https://ssims437.github.io/redundanz/">Redundanz</a> ·
+      <a href="https://ssims437.github.io/reparatur/">Reparatur</a> ·
+      <a href="https://ssims437.github.io/wuerfel/">Würfel</a> ·
+      <a href="https://ssims437.github.io/rechenwerk/">Rechenwerk</a> ·
+      <a href="https://ssims437.github.io/nachkomma/">Nachkomma</a> ·
+      <a href="https://ssims437.github.io/zeitsprung/">Zeitsprung</a> ·
+      <a href="https://ssims437.github.io/gradtage/">Gradtage</a> ·
+      <a href="https://ssims437.github.io/stimmfuehrung/">Stimmführung</a> ·
+      <a href="https://ssims437.github.io/verzerrung/">Verzerrung</a> ·
+      <a href="https://ssims437.github.io/handschlag/">Handschlag</a> ·
+      <a href="https://ssims437.github.io/wegewahl/">Wegewahl</a> ·
+      <a href="https://ssims437.github.io/frequenzgang/">Frequenzgang</a> ·
+      <a href="https://ssims437.github.io/auszaehlung/">Auszählung</a>
+    </span>
+  </p>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+
+  /* ===================== Zufall mit Gedächtnis ===================== */
+  function wuerfel(saat) {
+    let a = saat >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ===================== B+-Baum =====================
+     Blätter tragen Schlüssel und Zeilenzeiger und sind verkettet; innere Knoten
+     tragen nur Trennschlüssel. Ordnung m = höchste Kinderzahl. */
+  function BPlusBaum(m) {
+    const maxKinder = m;
+    const minKinder = Math.ceil(m / 2);
+    const maxBlatt = m - 1;
+    const minBlatt = Math.ceil((m - 1) / 2);
+
+    const neuesBlatt = () => ({ blatt: true, schl: [], werte: [], weiter: null });
+    const neuerKnoten = () => ({ blatt: false, schl: [], kinder: [] });
+    let wurzel = neuesBlatt();
+
+    /* Erste Stelle, an der schl[i] >= s gilt — binär, wie im Ernstfall. */
+    function stelle(feld, s) {
+      let lo = 0, hi = feld.length;
+      while (lo < hi) {
+        const mi = (lo + hi) >> 1;
+        if (feld[mi] < s) lo = mi + 1; else hi = mi;
+      }
+      return lo;
+    }
+
+    /* Erste Stelle, an der schl[i] > s gilt. */
+    function oberStelle(feld, s) {
+      let lo = 0, hi = feld.length;
+      while (lo < hi) {
+        const mi = (lo + hi) >> 1;
+        if (feld[mi] <= s) lo = mi + 1; else hi = mi;
+      }
+      return lo;
+    }
+
+    /* Der Baum verlangt eindeutige Schlüssel — mit doppelten wären die
+       Trennschlüssel mehrdeutig, und ein Wert könnte links und rechts davon
+       liegen. Der Aufrufer hängt deshalb die Zeilennummer an den Wert an; genau
+       das machen echte Datenbanken auch.
+
+       Die Abstiegsregel ist die zweite Stelle, an der man sich vertun kann:
+       links stehen die Schlüssel kleiner als der Trennschlüssel, rechts die
+       gleich großen und größeren. Wer beim Gleichstand nach links absteigt,
+       findet nach einem Ausleihen vom linken Nachbarn seinen eigenen Schlüssel
+       nicht mehr — dann steht der Trennschlüssel selbst im rechten Kind. */
+    function kindIndex(knoten, s) {
+      return oberStelle(knoten.schl, s);
+    }
+
+    function einfuegen(s, wert) {
+      const geteilt = einfuegenIn(wurzel, s, wert);
+      if (geteilt) {
+        const neu = neuerKnoten();
+        neu.schl = [geteilt.schl];
+        neu.kinder = [wurzel, geteilt.knoten];
+        wurzel = neu;
+      }
+    }
+
+    function einfuegenIn(knoten, s, wert) {
+      if (knoten.blatt) {
+        const i = stelle(knoten.schl, s);
+        knoten.schl.splice(i, 0, s);
+        knoten.werte.splice(i, 0, wert);
+        if (knoten.schl.length <= maxBlatt) return null;
+        const mitte = Math.ceil(knoten.schl.length / 2);
+        const rechts = neuesBlatt();
+        rechts.schl = knoten.schl.splice(mitte);
+        rechts.werte = knoten.werte.splice(mitte);
+        rechts.weiter = knoten.weiter;
+        knoten.weiter = rechts;
+        return { schl: rechts.schl[0], knoten: rechts };
+      }
+      const i = kindIndex(knoten, s);
+      const geteilt = einfuegenIn(knoten.kinder[i], s, wert);
+      if (!geteilt) return null;
+      knoten.schl.splice(i, 0, geteilt.schl);
+      knoten.kinder.splice(i + 1, 0, geteilt.knoten);
+      if (knoten.kinder.length <= maxKinder) return null;
+      const mitte = Math.floor(knoten.kinder.length / 2);
+      const rechts = neuerKnoten();
+      const hoch = knoten.schl[mitte - 1];
+      rechts.schl = knoten.schl.splice(mitte);
+      knoten.schl.pop();                                  // der Trennschlüssel wandert nach oben
+      rechts.kinder = knoten.kinder.splice(mitte);
+      return { schl: hoch, knoten: rechts };
+    }
+
+    /* Löschen mit Ausleihen und Verschmelzen. Der Rückgabewert sagt nur, ob der
+       Knoten unterfüllt ist — die Reparatur macht immer der Vater. */
+    function loeschen(s) {
+      const weg = loeschenIn(wurzel, s);
+      if (!wurzel.blatt && wurzel.kinder.length === 1) wurzel = wurzel.kinder[0];
+      return weg;
+    }
+
+    function loeschenIn(knoten, s) {
+      if (knoten.blatt) {
+        const i = stelle(knoten.schl, s);
+        if (i >= knoten.schl.length || knoten.schl[i] !== s) return false;
+        knoten.schl.splice(i, 1);
+        knoten.werte.splice(i, 1);
+        return true;
+      }
+      const i = kindIndex(knoten, s);
+      const weg = loeschenIn(knoten.kinder[i], s);
+      if (!weg) return false;
+      const kind = knoten.kinder[i];
+      const unterfuellt = kind.blatt ? kind.schl.length < minBlatt : kind.kinder.length < minKinder;
+      if (unterfuellt) reparieren(knoten, i);
+      return true;
+    }
+
+    function reparieren(vater, i) {
+      const kind = vater.kinder[i];
+      const links = i > 0 ? vater.kinder[i - 1] : null;
+      const rechts = i < vater.kinder.length - 1 ? vater.kinder[i + 1] : null;
+      const genugL = links && (links.blatt ? links.schl.length > minBlatt : links.kinder.length > minKinder);
+      const genugR = rechts && (rechts.blatt ? rechts.schl.length > minBlatt : rechts.kinder.length > minKinder);
+
+      if (genugL) {                                        // vom linken Nachbarn ausleihen
+        if (kind.blatt) {
+          kind.schl.unshift(links.schl.pop());
+          kind.werte.unshift(links.werte.pop());
+          vater.schl[i - 1] = kind.schl[0];
+        } else {
+          kind.schl.unshift(vater.schl[i - 1]);
+          kind.kinder.unshift(links.kinder.pop());
+          vater.schl[i - 1] = links.schl.pop();
+        }
+        return;
+      }
+      if (genugR) {                                        // vom rechten Nachbarn ausleihen
+        if (kind.blatt) {
+          kind.schl.push(rechts.schl.shift());
+          kind.werte.push(rechts.werte.shift());
+          vater.schl[i] = rechts.schl[0];
+        } else {
+          kind.schl.push(vater.schl[i]);
+          kind.kinder.push(rechts.kinder.shift());
+          vater.schl[i] = rechts.schl.shift();
+        }
+        return;
+      }
+      // verschmelzen: mit dem linken Nachbarn, wenn es einen gibt, sonst mit dem rechten
+      if (links) {
+        if (kind.blatt) {
+          links.schl.push(...kind.schl);
+          links.werte.push(...kind.werte);
+          links.weiter = kind.weiter;
+        } else {
+          links.schl.push(vater.schl[i - 1], ...kind.schl);
+          links.kinder.push(...kind.kinder);
+        }
+        vater.schl.splice(i - 1, 1);
+        vater.kinder.splice(i, 1);
+      } else if (rechts) {
+        if (kind.blatt) {
+          kind.schl.push(...rechts.schl);
+          kind.werte.push(...rechts.werte);
+          kind.weiter = rechts.weiter;
+        } else {
+          kind.schl.push(vater.schl[i], ...rechts.schl);
+          kind.kinder.push(...rechts.kinder);
+        }
+        vater.schl.splice(i, 1);
+        vater.kinder.splice(i + 1, 1);
+      }
+    }
+
+    /* Bereichssuche. Gezählt wird, was eine Datenbank zählen würde: jeder
+       besuchte Knoten ist eine Seite. */
+    function bereich(von, bis, spur) {
+      const treffer = [];
+      let knoten = wurzel, seiten = 0;
+      const angefasst = spur ? [] : null;
+      while (!knoten.blatt) {
+        seiten++;
+        if (angefasst) angefasst.push(knoten);
+        knoten = knoten.kinder[kindIndex(knoten, von)];
+      }
+      let i = stelle(knoten.schl, von);
+      for (;;) {
+        seiten++;
+        if (angefasst) angefasst.push(knoten);
+        for (; i < knoten.schl.length; i++) {
+          if (knoten.schl[i] > bis) return { treffer, seiten, angefasst };
+          treffer.push(knoten.werte[i]);
+        }
+        if (!knoten.weiter) return { treffer, seiten, angefasst };
+        knoten = knoten.weiter;
+        i = 0;
+      }
+    }
+
+    function hoehe() {
+      let h = 1, k = wurzel;
+      while (!k.blatt) { h++; k = k.kinder[0]; }
+      return h;
+    }
+
+    function knotenZaehlen() {
+      let innere = 0, blaetter = 0, eintraege = 0;
+      (function ab(k) {
+        if (k.blatt) { blaetter++; eintraege += k.schl.length; return; }
+        innere++;
+        for (const kk of k.kinder) ab(kk);
+      })(wurzel);
+      return { innere, blaetter, eintraege };
+    }
+
+    /* Alle Bedingungen eines B+-Baums, einzeln benannt, damit ein Bruch nicht
+       nur „ungültig" heißt. */
+    function pruefen() {
+      const maengel = [];
+      const tiefen = new Set();
+      (function ab(k, tiefe, unten, oben, istWurzel) {
+        for (let i = 1; i < k.schl.length; i++)
+          if (k.schl[i - 1] > k.schl[i]) maengel.push("Schlüssel unsortiert");
+        if (unten !== null && k.schl.length && k.schl[0] < unten) maengel.push("Schlüssel unter der Schranke");
+        if (oben !== null && k.schl.length && k.schl[k.schl.length - 1] > oben) maengel.push("Schlüssel über der Schranke");
+        if (k.blatt) {
+          tiefen.add(tiefe);
+          if (!istWurzel && k.schl.length < minBlatt) maengel.push("Blatt unterfüllt");
+          if (k.schl.length > maxBlatt) maengel.push("Blatt überfüllt");
+          if (k.schl.length !== k.werte.length) maengel.push("Schlüssel und Werte verschoben");
+          return;
+        }
+        if (k.kinder.length !== k.schl.length + 1) maengel.push("Kinderzahl passt nicht zu Trennschlüsseln");
+        if (!istWurzel && k.kinder.length < minKinder) maengel.push("Knoten unterfüllt");
+        if (k.kinder.length > maxKinder) maengel.push("Knoten überfüllt");
+        if (istWurzel && !k.blatt && k.kinder.length < 2) maengel.push("Wurzel mit einem Kind");
+        for (let i = 0; i < k.kinder.length; i++) {
+          const u = i === 0 ? unten : k.schl[i - 1];
+          const o = i === k.schl.length ? oben : k.schl[i];
+          ab(k.kinder[i], tiefe + 1, u, o, false);
+        }
+      })(wurzel, 0, null, null, true);
+      if (tiefen.size > 1) maengel.push("Blätter auf verschiedenen Tiefen");
+
+      // Blattkette: alle Blätter, in Reihenfolge, ohne Loch
+      const inKette = [];
+      let b = wurzel;
+      while (!b.blatt) b = b.kinder[0];
+      let voriger = -Infinity;
+      while (b) {
+        for (const s of b.schl) {
+          if (s < voriger) maengel.push("Blattkette unsortiert");
+          voriger = s;
+        }
+        inKette.push(b);
+        b = b.weiter;
+      }
+      const gezaehlt = knotenZaehlen();
+      if (inKette.length !== gezaehlt.blaetter) maengel.push("Blattkette unvollständig");
+      return maengel;
+    }
+
+    return { einfuegen, loeschen, bereich, hoehe, knotenZaehlen, pruefen,
+             get wurzel() { return wurzel; }, minBlatt, maxBlatt, minKinder, maxKinder };
+  }
+
+  /* ===================== Tabelle =====================
+     Zeilen liegen in Seiten fester Größe. „Nach Schlüssel abgelegt" heißt:
+     die Zeilenreihenfolge folgt dem Schlüssel — sonst liegt sie beliebig. */
+  const SPANNE = 1000;                                   // Wertebereich des Schlüssels
+  /* Zusammengesetzter Indexschlüssel: Wert mal 2¹⁸ plus Zeilennummer. Damit ist
+     jeder Schlüssel eindeutig, die Sortierung bleibt die nach dem Wert, und die
+     Zahl passt exakt in ein Double (1000 · 262144 + 200000 < 2⁵³). */
+  const ZEILEN_BITS = 262144;
+  const iSchl = (wert, zeile) => wert * ZEILEN_BITS + zeile;
+
+  let N = 20000, ORDNUNG = 32, PRO_SEITE = 32, GECLUSTERT = false;
+  let SCHLUESSEL = null, BAUM = null, HISTOGRAMM = null, SEITEN = 0;
+
+  function tabelleBauen() {
+    const z = wuerfel(20260817);
+    const werte = new Int32Array(N);
+    /* Verteilung mit Schwerpunkt in der Mitte — sonst ist jede Trefferquote
+       schon aus der Grenze abzulesen und der Planer hat es zu leicht. */
+    for (let i = 0; i < N; i++) {
+      const u = (z() + z() + z()) / 3;
+      werte[i] = Math.min(SPANNE, Math.max(0, Math.round(u * SPANNE)));
+    }
+    if (GECLUSTERT) werte.sort();
+    SCHLUESSEL = werte;
+    SEITEN = Math.ceil(N / PRO_SEITE);
+
+    BAUM = BPlusBaum(ORDNUNG);
+    /* Der Index wird in Schlüsselreihenfolge gefüllt — so entsteht derselbe
+       Baum, den ein CREATE INDEX auf eine bestehende Tabelle baut. */
+    const reihen = Array.from({ length: N }, (_, i) => i);
+    reihen.sort((a, b) => werte[a] - werte[b] || a - b);
+    for (const r of reihen) BAUM.einfuegen(iSchl(werte[r], r), r);
+
+    HISTOGRAMM = new Int32Array(64);
+    for (let i = 0; i < N; i++) HISTOGRAMM[Math.min(63, Math.floor(werte[i] / (SPANNE + 1) * 64))]++;
+  }
+
+  /* Vollständiger Durchlauf: jede Seite genau einmal. */
+  function durchlauf(von, bis) {
+    const treffer = [];
+    for (let i = 0; i < N; i++) if (SCHLUESSEL[i] >= von && SCHLUESSEL[i] <= bis) treffer.push(i);
+    return { treffer, seiten: SEITEN };
+  }
+
+  /* Über den Index: Baumseiten plus die Tabellenseiten der Treffer. Eine Seite,
+     die zweimal gebraucht wird, zählt zweimal — außer sie ist noch dieselbe wie
+     beim letzten Treffer. Genau so verhält sich ein Zugriff ohne Bitmap. */
+  function indexZugriff(von, bis, spur) {
+    const r = BAUM.bereich(iSchl(von, 0), iSchl(bis, ZEILEN_BITS - 1), spur);
+    let zeilenSeiten = 0, letzte = -1;
+    const beruehrt = new Set();
+    for (const zeile of r.treffer) {
+      const seite = Math.floor(zeile / PRO_SEITE);
+      beruehrt.add(seite);
+      if (seite !== letzte) { zeilenSeiten++; letzte = seite; }
+    }
+    return { treffer: r.treffer, baumSeiten: r.seiten, zeilenSeiten,
+             seiten: r.seiten + zeilenSeiten, beruehrt, angefasst: r.angefasst };
+  }
+
+  /* Der Planer: schätzt aus dem Histogramm, rechnet mit derselben Formel wie
+     oben — und weiß dabei nicht, wie die Zeilen tatsächlich liegen. */
+  function planen(von, bis) {
+    let geschaetzt = 0;
+    const breite = (SPANNE + 1) / 64;
+    for (let b = 0; b < 64; b++) {
+      const bVon = b * breite, bBis = (b + 1) * breite - 1;
+      const ueber = Math.min(bis, bBis) - Math.max(von, bVon) + 1;
+      if (ueber <= 0) continue;
+      geschaetzt += HISTOGRAMM[b] * Math.min(1, ueber / breite);
+    }
+    const quote = geschaetzt / N;
+    const hoehe = BAUM.hoehe();
+    const blaetter = BAUM.knotenZaehlen().blaetter;
+    const kostenScan = SEITEN;
+    const kostenIndex = hoehe + Math.ceil(quote * blaetter) +
+      (GECLUSTERT ? Math.ceil(quote * SEITEN) : Math.min(SEITEN, Math.round(geschaetzt)));
+    return { geschaetzt, quote, kostenScan, kostenIndex,
+             wahl: kostenIndex < kostenScan ? "index" : "scan" };
+  }
+
+  /* ===================== Zeichnen ===================== */
+  function farbe(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+  function zeichnenBaum(angefasst) {
+    const c = $("baum"), g = c.getContext("2d");
+    g.fillStyle = farbe("--tief"); g.fillRect(0, 0, c.width, c.height);
+    const markiert = new Set(angefasst || []);
+
+    // Ebenen einsammeln
+    const ebenen = [];
+    let reihe = [BAUM.wurzel];
+    while (reihe.length) {
+      ebenen.push(reihe);
+      if (reihe[0].blatt) break;
+      const naechste = [];
+      for (const k of reihe) naechste.push(...k.kinder);
+      reihe = naechste;
+      if (naechste.length > 4096) { ebenen.push(naechste); break; }
+    }
+
+    const rand = 10;
+    const hoehe = ebenen.length;
+    const zeilenHoehe = (c.height - 2 * rand) / hoehe;
+    const kastenHoehe = Math.min(26, zeilenHoehe * 0.55);
+
+    g.font = "9px ui-monospace, monospace";
+    g.textAlign = "center"; g.textBaseline = "middle";
+
+    ebenen.forEach((ebene, tiefe) => {
+      const y = rand + tiefe * zeilenHoehe + zeilenHoehe / 2;
+      const breite = (c.width - 2 * rand) / ebene.length;
+      const kastenBreite = Math.max(1, Math.min(120, breite * 0.86));
+      ebene.forEach((k, i) => {
+        const x = rand + i * breite + breite / 2;
+        const dran = markiert.has(k);
+        g.fillStyle = dran ? farbe("--baum") : farbe("--feld");
+        g.fillRect(x - kastenBreite / 2, y - kastenHoehe / 2, kastenBreite, kastenHoehe);
+        g.strokeStyle = dran ? farbe("--baum") : farbe("--linie");
+        g.lineWidth = dran ? 1.6 : 1;
+        g.strokeRect(x - kastenBreite / 2, y - kastenHoehe / 2, kastenBreite, kastenHoehe);
+        if (kastenBreite > 34 && kastenHoehe > 10) {
+          g.fillStyle = dran ? farbe("--feld") : farbe("--leise");
+          // Angezeigt wird der Wert, nicht der zusammengesetzte Schlüssel
+          const text = k.blatt ? k.schl.length + " Zeilen"
+            : k.schl.map((s) => Math.floor(s / ZEILEN_BITS)).join(" ");
+          const kurz = text.length > Math.floor(kastenBreite / 5.4)
+            ? text.slice(0, Math.max(1, Math.floor(kastenBreite / 5.4) - 1)) + "…" : text;
+          g.fillText(kurz, x, y);
+        }
+      });
+      // Beschriftung der Ebene
+      g.textAlign = "left"; g.fillStyle = farbe("--leise");
+      g.fillText(ebene[0].blatt ? "Blätter · " + ebene.length : "Ebene " + tiefe + " · " + ebene.length,
+        rand, rand + tiefe * zeilenHoehe + 6);
+      g.textAlign = "center";
+    });
+
+    const z = BAUM.knotenZaehlen();
+    $("baum-lage").textContent = "Höhe " + BAUM.hoehe() + " · " + z.innere + " innere Knoten · " +
+      z.blaetter + " Blätter · Füllung " + (z.eintraege / (z.blaetter * BAUM.maxBlatt) * 100).toFixed(0) + " %";
+  }
+
+  function zeichnenKurve(aktuelleQuote) {
+    const c = $("kurve"), g = c.getContext("2d");
+    const links = 54, unten = 30, oben = 12, rechts = 10;
+    const B = c.width - links - rechts, H = c.height - unten - oben;
+    g.fillStyle = farbe("--tief"); g.fillRect(0, 0, c.width, c.height);
+
+    /* Für 60 Trefferquoten gemessen, nicht geschätzt: die Grenze wird so
+       gewählt, dass ungefähr der gewünschte Anteil getroffen wird. */
+    const sortiert = Int32Array.from(SCHLUESSEL).sort();
+    const punkte = [];
+    for (let i = 0; i <= 60; i++) {
+      const quote = i / 60;
+      const bis = sortiert[Math.min(N - 1, Math.max(0, Math.round(quote * (N - 1))))];
+      const ix = indexZugriff(0, bis, false);
+      const pl = planen(0, bis);
+      punkte.push({ quote: ix.treffer.length / N, index: ix.seiten, scan: SEITEN,
+                    wahl: pl.wahl, schaetzIndex: pl.kostenIndex });
+    }
+    /* Die Achse ist logarithmisch: der Index kostet zwischen einer Handvoll und
+       zwanzigtausend Seiten, und der interessante Bereich liegt ganz unten. Linear
+       wäre der Kipppunkt ein Punkt auf der Nulllinie. */
+    const maxY = Math.max(SEITEN, ...punkte.map((p) => p.index)) * 1.6;
+    const nachX = (q) => links + q * B;
+    const nachY = (v) => oben + H * (1 - Math.log10(Math.max(1, v)) / Math.log10(maxY));
+
+    g.strokeStyle = farbe("--netz"); g.globalAlpha = .45; g.lineWidth = 1;
+    g.font = "10px ui-monospace, monospace"; g.textAlign = "right"; g.textBaseline = "middle";
+    for (let e = 0; Math.pow(10, e) <= maxY; e++) {
+      const v = Math.pow(10, e), y = nachY(v);
+      g.beginPath(); g.moveTo(links, y); g.lineTo(c.width - rechts, y); g.stroke();
+      g.globalAlpha = 1; g.fillStyle = farbe("--leise");
+      g.fillText(v.toLocaleString("de-AT"), links - 6, y); g.globalAlpha = .45;
+    }
+    g.textAlign = "center"; g.textBaseline = "top";
+    for (let i = 0; i <= 10; i++) {
+      const q = i / 10, x = nachX(q);
+      g.beginPath(); g.moveTo(x, oben); g.lineTo(x, oben + H); g.stroke();
+      g.globalAlpha = 1; g.fillStyle = farbe("--leise");
+      g.fillText((q * 100).toFixed(0) + " %", x, oben + H + 6); g.globalAlpha = .45;
+    }
+    g.globalAlpha = 1;
+
+    // wo der Planer den Index nimmt
+    const indexBis = punkte.filter((p) => p.wahl === "index");
+    if (indexBis.length) {
+      const grenze = Math.max(...indexBis.map((p) => p.quote));
+      g.fillStyle = farbe("--baum") + "14";
+      g.fillRect(links, oben, nachX(grenze) - links, H);
+      g.strokeStyle = farbe("--baum"); g.setLineDash([4, 4]); g.lineWidth = 1;
+      g.beginPath(); g.moveTo(nachX(grenze), oben); g.lineTo(nachX(grenze), oben + H); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = farbe("--baum"); g.textAlign = "left"; g.textBaseline = "top";
+      g.fillText("Planer nimmt bis hier den Index", nachX(grenze) + 6, oben + 4);
+    }
+
+    const linie = (feld, farbname, breite, gestrichelt) => {
+      g.strokeStyle = farbe(farbname); g.lineWidth = breite;
+      if (gestrichelt) g.setLineDash([5, 4]);
+      g.beginPath();
+      punkte.forEach((p, i) => {
+        const x = nachX(p.quote), y = nachY(feld(p));
+        i ? g.lineTo(x, y) : g.moveTo(x, y);
+      });
+      g.stroke(); g.setLineDash([]);
+    };
+    linie((p) => p.scan, "--scan", 1.8, false);
+    linie((p) => p.index, "--baum", 1.8, false);
+    linie((p) => p.schaetzIndex, "--heap", 1.3, true);
+
+    // der Punkt, an dem die Kurven sich schneiden — gemessen
+    let kipp = null;
+    for (let i = 1; i < punkte.length; i++) {
+      if (punkte[i - 1].index <= punkte[i - 1].scan && punkte[i].index > punkte[i].scan) {
+        kipp = punkte[i].quote;
+        break;
+      }
+    }
+    if (kipp !== null) {
+      g.fillStyle = farbe("--warn");
+      g.beginPath(); g.arc(nachX(kipp), nachY(SEITEN), 4, 0, 7); g.fill();
+    }
+
+    // die laufende Abfrage
+    g.strokeStyle = farbe("--treff"); g.lineWidth = 1.4;
+    g.beginPath(); g.moveTo(nachX(aktuelleQuote), oben); g.lineTo(nachX(aktuelleQuote), oben + H); g.stroke();
+
+    $("kurve-lage").textContent = SEITEN.toLocaleString("de-AT") + " Tabellenseiten · " +
+      PRO_SEITE + " Zeilen je Seite" + (GECLUSTERT ? " · nach Schlüssel abgelegt" : " · verstreut abgelegt");
+    $("kurve-fuss").innerHTML =
+      "<span class='strich' style='background:var(--baum)'></span>über den Index (gezählt) · " +
+      "<span class='strich' style='background:var(--scan)'></span>alles durchlesen · " +
+      "<span class='strich' style='background:var(--heap)'></span>gestrichelt: was der Planer <i>schätzt</i> · " +
+      "<span class='strich' style='background:var(--treff)'></span>die laufende Abfrage. " +
+      "Die senkrechte Achse ist logarithmisch." +
+      (kipp !== null
+        ? " <b>Kipppunkt gemessen bei " + (kipp * 100).toFixed(1) + " % Trefferquote</b>" +
+          (GECLUSTERT ? " — mit Clustering weit oben, weil der Index die Seiten der Reihe nach liest."
+                      : " — ab da liest der vollständige Durchlauf weniger Seiten als der Index.")
+        : " <b>Kein Kipppunkt im Bild</b> — der Index bleibt hier über den ganzen Bereich vorn.");
+  }
+
+  /* ===================== Abfrage ===================== */
+  function abfrage() {
+    let von = +$("von").value, bis = +$("bis").value;
+    if (von > bis) { [von, bis] = [bis, von]; }
+    $("von-zahl").textContent = von;
+    $("bis-zahl").textContent = bis;
+    $("abfrage-text").textContent =
+      "wähle * aus messwerte wo wert zwischen " + von + " und " + bis;
+
+    const ix = indexZugriff(von, bis, true);
+    const dl = durchlauf(von, bis);
+    const pl = planen(von, bis);
+
+    const gleich = ix.treffer.length === dl.treffer.length;
+    $("w-treffer").textContent = dl.treffer.length.toLocaleString("de-AT");
+    const quote = dl.treffer.length / N;
+    $("w-quote").textContent = (quote * 100).toFixed(2) + " %";
+    $("w-index").textContent = ix.seiten.toLocaleString("de-AT");
+    $("w-scan").textContent = dl.seiten.toLocaleString("de-AT");
+
+    const tb = $("planer").querySelector("tbody");
+    tb.textContent = "";
+    const zeile = (was, wert, klasse) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + was + "</td><td class='z " + (klasse || "") + "'>" + wert + "</td>";
+      tb.append(tr);
+    };
+    const besser = ix.seiten < dl.seiten ? "index" : "scan";
+    zeile("Schätzung Treffer", Math.round(pl.geschaetzt).toLocaleString("de-AT") +
+      " <span class='kl'>ist " + dl.treffer.length.toLocaleString("de-AT") + "</span>",
+      Math.abs(pl.geschaetzt - dl.treffer.length) / Math.max(1, dl.treffer.length) < 0.1 ? "gutt" : "schlecht");
+    zeile("Schätzung Index", pl.kostenIndex.toLocaleString("de-AT") +
+      " <span class='kl'>ist " + ix.seiten.toLocaleString("de-AT") + "</span>");
+    zeile("Baumseiten · Zeilenseiten", ix.baumSeiten + " · " + ix.zeilenSeiten.toLocaleString("de-AT"));
+    zeile("Planerwahl", pl.wahl === "index" ? "Index" : "durchlesen",
+      pl.wahl === besser ? "gutt" : "schlecht");
+    zeile("tatsächlich billiger", besser === "index" ? "Index" : "durchlesen", "gutt");
+
+    $("abfrage-fuss").innerHTML = (gleich
+      ? "Beide Wege liefern <b>" + dl.treffer.length.toLocaleString("de-AT") + "</b> Zeilen. "
+      : "<b style='color:var(--warn)'>Die Wege liefern verschiedene Ergebnisse.</b> ") +
+      (pl.wahl === besser
+        ? "Der Planer wählt hier richtig."
+        : "<b style='color:var(--warn)'>Der Planer greift daneben</b> — er wählt " +
+          (pl.wahl === "index" ? "den Index" : "den Durchlauf") + ", billiger wäre " +
+          (besser === "index" ? "der Index" : "der Durchlauf") + ".");
+
+    zeichnenBaum(ix.angefasst);
+    zeichnenKurve(quote);
+  }
+
+  function neuBauen() {
+    tabelleBauen();
+    abfrage();
+  }
+
+  /* ===================== Prüflauf ===================== */
+  function pruefen() {
+    const tb = $("pruef").querySelector("tbody");
+    tb.textContent = "";
+    let fehler = 0;
+    const zeile = (was, gut, text) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + was + "</td><td style='color:" + (gut ? "var(--gut)" : "var(--warn)") + "'>" + text + "</td>";
+      tb.append(tr);
+      if (!gut) fehler++;
+    };
+    const t0 = performance.now();
+
+    /* Eine Mischung, in der jeder Schlüssel nur einmal vorkommt: gemischte
+       Reihenfolge, damit weder der aufsteigende noch der absteigende Sonderfall
+       das Bild bestimmt. */
+    const gemischt = (anzahl, saat) => {
+      const z = wuerfel(saat);
+      const feld = Array.from({ length: anzahl }, (_, i) => i * 3 + 7);
+      for (let i = feld.length - 1; i > 0; i--) {
+        const j = Math.floor(z() * (i + 1));
+        [feld[i], feld[j]] = [feld[j], feld[i]];
+      }
+      return feld;
+    };
+
+    // 1. Bedingungen nach jeder einzelnen Einfügung, für vier Ordnungen.
+    {
+      let maengel = [], schritte = 0;
+      for (const m of [4, 5, 8, 32]) {
+        const baum = BPlusBaum(m);
+        const schl = gemischt(400, 12345 + m);
+        for (let i = 0; i < schl.length; i++) {
+          baum.einfuegen(schl[i], i);
+          schritte++;
+          const f = baum.pruefen();
+          if (f.length) { maengel = maengel.concat(f.map((s) => "m=" + m + " nach " + (i + 1) + ": " + s)); break; }
+        }
+      }
+      zeile("Bedingungen nach jeder Einfügung", maengel.length === 0,
+        schritte.toLocaleString("de-AT") + " Einfügungen über vier Ordnungen · " +
+        (maengel.length ? maengel[0] : "kein Mangel"));
+    }
+
+    // 2. Bedingungen nach jedem Löschen, bis der Baum leer ist.
+    {
+      let maengel = [], schritte = 0;
+      for (const m of [4, 5, 8, 32]) {
+        const baum = BPlusBaum(m);
+        const schl = gemischt(300, 999 + m);
+        schl.forEach((s, i) => baum.einfuegen(s, i));
+        const raus = gemischt(300, 777 + m).map((x) => (x - 7) / 3).map((i) => schl[i]);
+        for (const s of raus) {
+          baum.loeschen(s);
+          schritte++;
+          const f = baum.pruefen();
+          if (f.length) { maengel = maengel.concat(f.map((x) => "m=" + m + ": " + x)); break; }
+        }
+        if (!maengel.length && baum.knotenZaehlen().eintraege !== 0)
+          maengel.push("m=" + m + ": Baum nicht leer");
+      }
+      zeile("Bedingungen nach jedem Löschen", maengel.length === 0,
+        schritte.toLocaleString("de-AT") + " Löschungen bis zum leeren Baum · " +
+        (maengel.length ? maengel[0] : "kein Mangel"));
+    }
+
+    // 3. Inhalt gegen eine unabhängige, stumpfe Menge — nach jedem Schritt.
+    {
+      let stimmt = true, schritte = 0, groesse = 0, ein = 0, aus = 0;
+      const baum = BPlusBaum(6);
+      const menge = new Set();
+      const z = wuerfel(555);
+      const vergleiche = () => {
+        const soll = [...menge].sort((a, b) => a - b);
+        const schl = [];
+        let b = baum.wurzel;
+        while (!b.blatt) b = b.kinder[0];
+        while (b) { schl.push(...b.schl); b = b.weiter; }
+        if (schl.length !== soll.length) return false;
+        for (let i = 0; i < schl.length; i++) if (schl[i] !== soll[i]) return false;
+        // und derselbe Inhalt noch einmal über die Bereichssuche
+        return baum.bereich(-Infinity, Infinity, false).treffer.length === soll.length;
+      };
+      for (let i = 0; i < 600 && stimmt; i++) {
+        schritte++;
+        if (menge.size === 0 || z() < 0.6) {
+          let s;
+          do { s = Math.floor(z() * 400); } while (menge.has(s));
+          baum.einfuegen(s, i); menge.add(s); ein++;
+        } else {
+          const liste = [...menge];
+          const s = liste[Math.floor(z() * liste.length)];
+          baum.loeschen(s); menge.delete(s); aus++;
+        }
+        groesse = menge.size;
+        if (!vergleiche()) stimmt = false;
+      }
+      zeile("Inhalt stimmt Schritt für Schritt", stimmt,
+        ein + " Einfügungen und " + aus + " Löschungen, nach jedem Schritt gegen eine Menge " +
+        "verglichen · Endgröße " + groesse);
+    }
+
+    // 4. Jede denkbare Bereichsabfrage gegen den stumpfen Durchlauf.
+    {
+      const nn = 600, spanne = 60;
+      const z = wuerfel(4242);
+      const werte = new Int32Array(nn);
+      for (let i = 0; i < nn; i++) werte[i] = Math.floor(z() * (spanne + 1));
+      const baum = BPlusBaum(6);
+      const reihen = Array.from({ length: nn }, (_, i) => i).sort((a, b) => werte[a] - werte[b] || a - b);
+      for (const r of reihen) baum.einfuegen(iSchl(werte[r], r), r);
+      let abfragen = 0, ungleich = 0, gesamtTreffer = 0;
+      for (let von = 0; von <= spanne; von++) {
+        for (let bis = von; bis <= spanne; bis++) {
+          abfragen++;
+          const ausBaum = baum.bereich(iSchl(von, 0), iSchl(bis, ZEILEN_BITS - 1), false)
+            .treffer.slice().sort((a, b) => a - b);
+          const stumpf = [];
+          for (let i = 0; i < nn; i++) if (werte[i] >= von && werte[i] <= bis) stumpf.push(i);
+          gesamtTreffer += stumpf.length;
+          if (ausBaum.length !== stumpf.length) { ungleich++; continue; }
+          for (let i = 0; i < stumpf.length; i++) if (ausBaum[i] !== stumpf[i]) { ungleich++; break; }
+        }
+      }
+      zeile("jede Bereichsabfrage stimmt", ungleich === 0,
+        abfragen.toLocaleString("de-AT") + " Abfragen erschöpfend über alle Grenzenpaare · " +
+        gesamtTreffer.toLocaleString("de-AT") + " Zeilen verglichen · " +
+        (ungleich === 0 ? "kein Unterschied" : ungleich + " Abweichungen"));
+    }
+
+    // 5. Punktsuche mit vielen gleichen Werten: findet der Index alle Zeilen?
+    {
+      const baum = BPlusBaum(8);
+      const z = wuerfel(31);
+      const anzahl = new Map();
+      const zeilen = 500;
+      for (let i = 0; i < zeilen; i++) {
+        const wert = Math.floor(z() * 40) * 2;               // nur gerade Werte, viele Duplikate
+        baum.einfuegen(iSchl(wert, i), i);
+        anzahl.set(wert, (anzahl.get(wert) || 0) + 1);
+      }
+      let falschNegativ = 0, falschPositiv = 0, geprueft = 0, maxGleiche = 0;
+      for (let wert = 0; wert < 90; wert++) {
+        geprueft++;
+        const gefunden = baum.bereich(iSchl(wert, 0), iSchl(wert, ZEILEN_BITS - 1), false).treffer.length;
+        const soll = anzahl.get(wert) || 0;
+        maxGleiche = Math.max(maxGleiche, soll);
+        if (gefunden < soll) falschNegativ++;
+        if (gefunden > soll) falschPositiv++;
+      }
+      zeile("Punktsuche findet alle gleichen Werte", falschNegativ === 0 && falschPositiv === 0,
+        geprueft + " Werte geprüft (gerade vorhanden, ungerade nicht) · " + zeilen +
+        " Zeilen auf " + anzahl.size + " Werte · häufigster Wert " + maxGleiche + " mal");
+    }
+
+    // 6. Höhe gegen die Schranke aus der Verzweigung.
+    {
+      let zeilen = [], gut = true;
+      for (const m of [4, 8, 32, 128]) {
+        const baum = BPlusBaum(m);
+        for (let i = 0; i < 20000; i++) baum.einfuegen(i, i);       // aufsteigend: der ungünstigste Fall
+        const h = baum.hoehe();
+        const schranke = Math.ceil(Math.log(20000 / Math.ceil((m - 1) / 2)) / Math.log(Math.ceil(m / 2))) + 1;
+        if (h > schranke) gut = false;
+        zeilen.push("m=" + m + ": " + h + " ≤ " + schranke);
+      }
+      zeile("Höhe bleibt unter der Schranke", gut, "20 000 Zeilen · " + zeilen.join(" · "));
+    }
+
+    // 7. Der gezählte Aufwand gegen die Erwartung: Punktzugriff kostet die Höhe.
+    {
+      const baum = BPlusBaum(32);
+      for (let i = 0; i < 50000; i++) baum.einfuegen(i, i);
+      const h = baum.hoehe();
+      /* Eine Bereichssuche muss ins nächste Blatt schauen, wenn der gesuchte
+         Wert am Blattende sitzt — sonst wüsste sie nicht, dass dort nichts mehr
+         kommt. Die Schranke ist also Höhe + 1, und das kommt genau so oft vor,
+         wie Werte am Blattende liegen. */
+      let gut = true, maxSeiten = 0, zugriffe = 0, mitNachbar = 0;
+      for (let s = 0; s < 50000; s += 97) {
+        const r = baum.bereich(s, s, false);
+        zugriffe++;
+        maxSeiten = Math.max(maxSeiten, r.seiten);
+        if (r.seiten > h) mitNachbar++;
+        if (r.seiten > h + 1) gut = false;
+      }
+      zeile("Punktzugriff kostet die Höhe", gut,
+        zugriffe + " Zugriffe auf 50 000 Zeilen · höchstens " + maxSeiten + " Seiten bei Höhe " + h +
+        " · " + mitNachbar + " mal musste ins nächste Blatt geschaut werden");
+    }
+
+    // 8. Der Planer: wie oft er die schlechtere Wahl trifft — ehrlich gezählt.
+    {
+      const merken = { N, ORDNUNG, PRO_SEITE, GECLUSTERT };
+      let ergebnisse = [];
+      for (const geclustert of [false, true]) {
+        N = 20000; ORDNUNG = 32; PRO_SEITE = 32; GECLUSTERT = geclustert;
+        tabelleBauen();
+        const sortiert = Int32Array.from(SCHLUESSEL).sort();
+        let falsch = 0, faelle = 0, maxSchaden = 0, maxSchaetzfehler = 0, maxKostenfehler = 0;
+        for (let i = 0; i <= 100; i++) {
+          const bis = sortiert[Math.min(N - 1, Math.round(i / 100 * (N - 1)))];
+          const ix = indexZugriff(0, bis, false);
+          const dl = durchlauf(0, bis);
+          const pl = planen(0, bis);
+          faelle++;
+          maxSchaetzfehler = Math.max(maxSchaetzfehler,
+            Math.abs(pl.geschaetzt - dl.treffer.length) / Math.max(1, dl.treffer.length));
+          maxKostenfehler = Math.max(maxKostenfehler,
+            Math.abs(pl.kostenIndex - ix.seiten) / Math.max(1, ix.seiten));
+          const besser = ix.seiten < dl.seiten ? "index" : "scan";
+          if (pl.wahl !== besser) {
+            falsch++;
+            const gewaehlt = pl.wahl === "index" ? ix.seiten : dl.seiten;
+            const optimal = Math.min(ix.seiten, dl.seiten);
+            maxSchaden = Math.max(maxSchaden, gewaehlt / optimal);
+          }
+        }
+        ergebnisse.push((geclustert ? "geclustert" : "verstreut") + ": " +
+          (falsch === 0 ? "kein Fehlgriff in " + faelle + " Fällen"
+                        : falsch + " von " + faelle + " danebengegriffen, schlimmster Fall " +
+                          maxSchaden.toFixed(2) + "-fach") +
+          ", Trefferschätzung bis " + (maxSchaetzfehler * 100).toFixed(0) +
+          " % daneben, Kostenschätzung bis " + (maxKostenfehler * 100).toFixed(0) + " %");
+      }
+      Object.assign({}, merken);
+      N = merken.N; ORDNUNG = merken.ORDNUNG; PRO_SEITE = merken.PRO_SEITE; GECLUSTERT = merken.GECLUSTERT;
+      tabelleBauen();
+      // Diese Zeile ist bestanden, wenn die Zahlen dastehen — sie ist eine Messung, kein Urteil.
+      zeile("Planer gegen die Wirklichkeit", true, ergebnisse.join(" · "));
+    }
+
+    const dauer = performance.now() - t0;
+    $("pruef-fuss").innerHTML = fehler === 0
+      ? "<b>Alle Prüfungen bestanden</b> in " + dauer.toFixed(0) + " ms. Die vierte Zeile ist die " +
+        "eigentliche Absicherung: 1 891 Bereichsabfragen, jede einzeln gegen den stumpfen Durchlauf " +
+        "durch 600 Zeilen — dort fällt jeder Fehler in Trennschlüsseln oder Blattkette auf."
+      : "<b style='color:var(--warn)'>" + fehler + " Prüfung(en) fehlgeschlagen.</b>";
+    abfrage();
+  }
+
+  /* ===================== Bedienung ===================== */
+  $("zeilen").addEventListener("change", (e) => { N = +e.target.value; neuBauen(); });
+  $("ordnung").addEventListener("change", (e) => { ORDNUNG = +e.target.value; neuBauen(); });
+  $("pro-seite").addEventListener("change", (e) => { PRO_SEITE = +e.target.value; neuBauen(); });
+  $("b-cluster").addEventListener("click", (e) => {
+    GECLUSTERT = !GECLUSTERT;
+    e.currentTarget.setAttribute("aria-pressed", String(GECLUSTERT));
+    neuBauen();
+  });
+  $("von").addEventListener("input", abfrage);
+  $("bis").addEventListener("input", abfrage);
+  $("von").max = String(SPANNE); $("bis").max = String(SPANNE);
+  $("b-pruefen").addEventListener("click", pruefen);
+  $("b-thema").addEventListener("click", () => {
+    const jetzt = document.documentElement.getAttribute("data-theme");
+    const dunkel = matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", jetzt ? (jetzt === "dark" ? "light" : "dark") : (dunkel ? "light" : "dark"));
+    abfrage();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", abfrage);
+
+  neuBauen();
+})();
+</script>
+</body>
+</html>
