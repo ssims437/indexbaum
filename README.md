@@ -103,22 +103,10 @@ die man an einem Nachmittag wirklich beantworten kann: wie viele Seiten kostet d
 Eine einzelne HTML-Datei. Kein Build, keine Bibliothek, nichts verlässt den Browser.
 Canvas 2D, B+-Baum mit Teilen/Ausleihen/Verschmelzen, typisierte Felder, hell und dunkel.
 
-## Verwandt
+## Die ganze Sammlung
 
-- [Plotterblätter](https://github.com/ssims437/plotterblaetter) — Wave Function Collapse, Wellengleichung, Physarum, Lenia
-- [Redundanz](https://github.com/ssims437/redundanz) — LZ77 und Huffman, Bitkosten je Zeichen
-- [Reparatur](https://github.com/ssims437/reparatur) — Reed-Solomon über GF(256)
-- [Würfel](https://github.com/ssims437/wuerfel) — Prüfstand für Zufallsgeneratoren
-- [Rechenwerk](https://github.com/ssims437/rechenwerk) — ein Rechner aus NAND-Gattern
-- [Nachkomma](https://github.com/ssims437/nachkomma) — IEEE 754, exakt ausgeschrieben
-- [Zeitsprung](https://github.com/ssims437/zeitsprung) — Zeitzonen und Sommerzeit
-- [Gradtage](https://github.com/ssims437/gradtage) — 41 Jahre Heiz- und Kühlgradtage
-- [Stimmführung](https://github.com/ssims437/stimmfuehrung) — Akkorde zu MIDI mit geführten Stimmen
-- [Verzerrung](https://github.com/ssims437/verzerrung) — Kartenprojektionen und Tissot-Indikatrizen
-- [Handschlag](https://github.com/ssims437/handschlag) — elliptische Kurven und der Schlüsseltausch
-- [Wegewahl](https://github.com/ssims437/wegewahl) — Dijkstra, A* und der Preis des Suchens
-- [Frequenzgang](https://github.com/ssims437/frequenzgang) — FFT, Fensterfunktionen und der Leckeffekt
-- [Auszählung](https://github.com/ssims437/auszaehlung) — Wahlverfahren und Sitzverteilung
+Fünfzehn Blätter nach Feld geordnet, jedes mit eigenem Repo:
+**[ssims437.github.io](https://ssims437.github.io/)**
 
 ## Lizenz
 
