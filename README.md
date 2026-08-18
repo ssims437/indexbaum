@@ -105,7 +105,7 @@ Canvas 2D, B+-Baum mit Teilen/Ausleihen/Verschmelzen, typisierte Felder, hell un
 
 ## Die ganze Sammlung
 
-Fünfzehn Blätter nach Feld geordnet, jedes mit eigenem Repo:
+Alle Blätter nach Feld geordnet, jedes mit eigenem Repo:
 **[ssims437.github.io](https://ssims437.github.io/)**
 
 ## Lizenz
